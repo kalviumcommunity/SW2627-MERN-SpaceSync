@@ -1,11 +1,25 @@
 import 'package:flutter/material.dart';
 
 import '../data/analytics_data.dart';
+import '../services/api_client.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_header.dart';
 
-class AnalyticsScreen extends StatelessWidget {
+class AnalyticsScreen extends StatefulWidget {
   const AnalyticsScreen({super.key});
+
+  @override
+  State<AnalyticsScreen> createState() => _AnalyticsScreenState();
+}
+
+class _AnalyticsScreenState extends State<AnalyticsScreen> {
+  late Future<List<LocationSummary>> _utilizationFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _utilizationFuture = ApiClient.instance.fetchUtilization();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -40,24 +54,47 @@ class AnalyticsScreen extends StatelessWidget {
                     style: Theme.of(context).textTheme.bodyMedium,
                   ),
                   const SizedBox(height: 18),
-                  const _KpiGrid(),
-                  const SizedBox(height: 24),
-                  const _SectionTitle(
-                    title: 'Occupancy Trend',
-                    trailing: '2026',
+                  FutureBuilder<List<LocationSummary>>(
+                    future: _utilizationFuture,
+                    builder: (context, snapshot) {
+                      if (snapshot.connectionState == ConnectionState.waiting) {
+                        return const _AnalyticsLoading();
+                      }
+                      if (snapshot.hasError) {
+                        return _AnalyticsError(
+                          message: snapshot.error.toString(),
+                          onRetry: () => setState(
+                            () => _utilizationFuture =
+                                ApiClient.instance.fetchUtilization(),
+                          ),
+                        );
+                      }
+                      final locations = snapshot.data ?? [];
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          _KpiGrid(locations: locations),
+                          const SizedBox(height: 24),
+                          const _SectionTitle(
+                            title: 'Occupancy Trend',
+                            trailing: 'Live API',
+                          ),
+                          const SizedBox(height: 11),
+                          const _OccupancyChartCard(),
+                          const SizedBox(height: 24),
+                          const _SectionTitle(title: 'Expansion Candidates'),
+                          const SizedBox(height: 4),
+                          Text(
+                            'Locations showing sustained demand',
+                            style: Theme.of(context).textTheme.bodyMedium,
+                          ),
+                          const SizedBox(height: 12),
+                          for (final candidate in _candidates(locations))
+                            _ExpansionCandidateCard(candidate: candidate),
+                        ],
+                      );
+                    },
                   ),
-                  const SizedBox(height: 11),
-                  const _OccupancyChartCard(),
-                  const SizedBox(height: 24),
-                  const _SectionTitle(title: 'Expansion Candidates'),
-                  const SizedBox(height: 4),
-                  Text(
-                    'Locations showing sustained demand',
-                    style: Theme.of(context).textTheme.bodyMedium,
-                  ),
-                  const SizedBox(height: 12),
-                  for (final candidate in expansionCandidates)
-                    _ExpansionCandidateCard(candidate: candidate),
                   const SizedBox(height: 4),
                 ],
               ),
@@ -73,37 +110,52 @@ class AnalyticsScreen extends StatelessWidget {
       ..hideCurrentSnackBar()
       ..showSnackBar(SnackBar(content: Text(message)));
   }
+
+  List<ExpansionCandidate> _candidates(List<LocationSummary> locations) {
+    final sorted = [...locations]
+      ..sort((a, b) => b.utilizationRate.compareTo(a.utilizationRate));
+    return sorted.take(2).map((location) {
+      final occupancy = (location.utilizationRate * 100).round();
+      return ExpansionCandidate(
+        location: location.name,
+        recommendation: occupancy >= 75 ? 'Add desks or rooms' : 'Monitor demand',
+        occupancy: occupancy,
+        priority: occupancy >= 75 ? 'High' : 'Medium',
+      );
+    }).toList();
+  }
 }
 
 class _KpiGrid extends StatelessWidget {
-  const _KpiGrid();
+  const _KpiGrid({required this.locations});
 
-  static const _metrics = <_KpiMetric>[
-    _KpiMetric(
-      '78%',
-      'Avg. Occupancy',
-      '+4.2% vs last month',
-      Icons.trending_up_rounded,
-    ),
-    _KpiMetric(
-      'Mon',
-      'Peak Day',
-      '93% avg occupancy',
-      Icons.calendar_today_rounded,
-    ),
-    _KpiMetric(
-      '₹12.4L',
-      'Revenue (MTD)',
-      '+18% vs last month',
-      Icons.trending_up_rounded,
-    ),
-    _KpiMetric(
-      '22%',
-      'Walk-in Rate',
-      '+3% vs last month',
-      Icons.trending_up_rounded,
-    ),
-  ];
+  final List<LocationSummary> locations;
+
+  List<_KpiMetric> get _metrics {
+    final average = locations.isEmpty
+        ? 0
+        : (locations.fold<double>(
+                    0,
+                    (total, location) => total + location.utilizationRate,
+                  ) /
+                  locations.length *
+                  100)
+              .round();
+    final walkIns = locations.fold<int>(
+      0,
+      (total, location) => total + location.walkInCount,
+    );
+    final spaces = locations.fold<int>(
+      0,
+      (total, location) => total + location.capacity,
+    );
+    return [
+      _KpiMetric('$average%', 'Avg. Occupancy', 'From backend analytics', Icons.trending_up_rounded),
+      _KpiMetric('${locations.length}', 'Locations', '$spaces active spaces', Icons.apartment_rounded),
+      _KpiMetric('$walkIns', 'Walk-ins', 'Recorded branch visits', Icons.directions_walk_rounded),
+      _KpiMetric('Live', 'API Status', 'Express + Mongo connected', Icons.cloud_done_rounded),
+    ];
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -124,6 +176,37 @@ class _KpiGrid extends StatelessWidget {
       },
     );
   }
+}
+
+class _AnalyticsLoading extends StatelessWidget {
+  const _AnalyticsLoading();
+
+  @override
+  Widget build(BuildContext context) => const Padding(
+    padding: EdgeInsets.symmetric(vertical: 48),
+    child: Center(child: CircularProgressIndicator()),
+  );
+}
+
+class _AnalyticsError extends StatelessWidget {
+  const _AnalyticsError({required this.message, required this.onRetry});
+
+  final String message;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.symmetric(vertical: 36),
+    child: Column(
+      children: [
+        Text('Could not load analytics', style: Theme.of(context).textTheme.titleLarge),
+        const SizedBox(height: 8),
+        Text(message, textAlign: TextAlign.center),
+        const SizedBox(height: 14),
+        FilledButton(onPressed: onRetry, child: const Text('Retry')),
+      ],
+    ),
+  );
 }
 
 class _KpiMetric {

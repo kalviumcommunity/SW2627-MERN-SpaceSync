@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
-import '../data/space_data.dart';
 import '../models/workspace_space.dart';
+import '../services/api_client.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_header.dart';
 
@@ -14,10 +14,16 @@ class SpacesScreen extends StatefulWidget {
 
 class _SpacesScreenState extends State<SpacesScreen> {
   int _selectedLocationIndex = 0;
+  late Future<List<WorkspaceLocation>> _locationsFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _locationsFuture = ApiClient.instance.fetchLocationsWithSpaces();
+  }
 
   @override
   Widget build(BuildContext context) {
-    final location = workspaceLocations[_selectedLocationIndex];
     final colors = AppColors.of(context);
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -50,41 +56,76 @@ class _SpacesScreenState extends State<SpacesScreen> {
                     style: Theme.of(context).textTheme.bodyMedium,
                   ),
                   const SizedBox(height: 18),
-                  _LocationSelector(
-                    selectedIndex: _selectedLocationIndex,
-                    onSelected: (index) =>
-                        setState(() => _selectedLocationIndex = index),
-                  ),
-                  const SizedBox(height: 16),
-                  _SpaceSummary(location: location),
-                  const SizedBox(height: 23),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          location.name,
-                          style: Theme.of(context).textTheme.titleLarge,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                      Text(
-                        '${location.spaces.where((space) => space.status == WorkspaceStatus.free).length} free',
-                        style: Theme.of(context).textTheme.labelMedium
-                            ?.copyWith(
-                              color: colors.success,
-                              fontSize: 12,
-                              fontWeight: FontWeight.w700,
+                  FutureBuilder<List<WorkspaceLocation>>(
+                    future: _locationsFuture,
+                    builder: (context, snapshot) {
+                      if (snapshot.connectionState == ConnectionState.waiting) {
+                        return const _InlineLoading(message: 'Loading spaces...');
+                      }
+                      if (snapshot.hasError) {
+                        return _InlineError(
+                          message: snapshot.error.toString(),
+                          onRetry: () => setState(
+                            () => _locationsFuture =
+                                ApiClient.instance.fetchLocationsWithSpaces(),
+                          ),
+                        );
+                      }
+
+                      final locations = snapshot.data ?? [];
+                      if (locations.isEmpty) {
+                        return const _InlineLoading(message: 'No branches yet.');
+                      }
+                      final selectedIndex = _selectedLocationIndex
+                          .clamp(0, locations.length - 1)
+                          .toInt();
+                      final location = locations[selectedIndex];
+
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          _LocationSelector(
+                            locations: locations,
+                            selectedIndex: selectedIndex,
+                            onSelected: (index) => setState(
+                              () => _selectedLocationIndex = index,
                             ),
-                      ),
-                    ],
+                          ),
+                          const SizedBox(height: 16),
+                          _SpaceSummary(location: location),
+                          const SizedBox(height: 23),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  location.name,
+                                  style: Theme.of(context).textTheme.titleLarge,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                              Text(
+                                '${location.spaces.where((space) => space.status == WorkspaceStatus.free).length} free',
+                                style: Theme.of(context).textTheme.labelMedium
+                                    ?.copyWith(
+                                      color: colors.success,
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 11),
+                          for (final space in location.spaces)
+                            _WorkspaceCard(
+                              space: space,
+                              onTap: () =>
+                                  _showSpaceDetails(context, location, space),
+                            ),
+                        ],
+                      );
+                    },
                   ),
-                  const SizedBox(height: 11),
-                  for (final space in location.spaces)
-                    _WorkspaceCard(
-                      space: space,
-                      onTap: () => _showSpaceDetails(context, location, space),
-                    ),
                 ],
               ),
             ),
@@ -110,18 +151,25 @@ class _SpacesScreenState extends State<SpacesScreen> {
       useSafeArea: true,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (context) =>
-          _SpaceDetailsSheet(location: location, space: space),
+      builder: (context) => _SpaceDetailsSheet(
+        location: location,
+        space: space,
+        onBooked: () => setState(
+          () => _locationsFuture = ApiClient.instance.fetchLocationsWithSpaces(),
+        ),
+      ),
     );
   }
 }
 
 class _LocationSelector extends StatelessWidget {
   const _LocationSelector({
+    required this.locations,
     required this.selectedIndex,
     required this.onSelected,
   });
 
+  final List<WorkspaceLocation> locations;
   final int selectedIndex;
   final ValueChanged<int> onSelected;
 
@@ -132,10 +180,10 @@ class _LocationSelector extends StatelessWidget {
       height: 42,
       child: ListView.separated(
         scrollDirection: Axis.horizontal,
-        itemCount: workspaceLocations.length,
+        itemCount: locations.length,
         separatorBuilder: (context, index) => const SizedBox(width: 8),
         itemBuilder: (context, index) {
-          final location = workspaceLocations[index];
+          final location = locations[index];
           final selected = index == selectedIndex;
           return ChoiceChip(
             label: Text(location.label),
@@ -326,10 +374,15 @@ class _WorkspaceCard extends StatelessWidget {
 }
 
 class _SpaceDetailsSheet extends StatelessWidget {
-  const _SpaceDetailsSheet({required this.location, required this.space});
+  const _SpaceDetailsSheet({
+    required this.location,
+    required this.space,
+    required this.onBooked,
+  });
 
   final WorkspaceLocation location;
   final WorkspaceSpace space;
+  final VoidCallback onBooked;
 
   @override
   Widget build(BuildContext context) {
@@ -412,17 +465,89 @@ class _SpaceDetailsSheet extends StatelessWidget {
             value: space.occupancyNote,
           ),
           const SizedBox(height: 6),
-          SizedBox(
-            width: double.infinity,
-            child: OutlinedButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: const Text('Close'),
-            ),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: const Text('Close'),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: FilledButton(
+                  onPressed: free && space.id != null
+                      ? () async {
+                          try {
+                            await ApiClient.instance.bookDemoSlot(space.id!);
+                            onBooked();
+                            if (context.mounted) {
+                              Navigator.of(context).pop();
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text('Demo booking created.'),
+                                ),
+                              );
+                            }
+                          } catch (error) {
+                            if (context.mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(content: Text(error.toString())),
+                              );
+                            }
+                          }
+                        }
+                      : null,
+                  child: const Text('Book'),
+                ),
+              ),
+            ],
           ),
         ],
       ),
     );
   }
+}
+
+class _InlineLoading extends StatelessWidget {
+  const _InlineLoading({required this.message});
+
+  final String message;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.symmetric(vertical: 44),
+    child: Center(
+      child: Column(
+        children: [
+          const CircularProgressIndicator(),
+          const SizedBox(height: 12),
+          Text(message),
+        ],
+      ),
+    ),
+  );
+}
+
+class _InlineError extends StatelessWidget {
+  const _InlineError({required this.message, required this.onRetry});
+
+  final String message;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.symmetric(vertical: 36),
+    child: Column(
+      children: [
+        Text('Could not load spaces', style: Theme.of(context).textTheme.titleLarge),
+        const SizedBox(height: 8),
+        Text(message, textAlign: TextAlign.center),
+        const SizedBox(height: 14),
+        FilledButton(onPressed: onRetry, child: const Text('Retry')),
+      ],
+    ),
+  );
 }
 
 class _DetailRow extends StatelessWidget {
