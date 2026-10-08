@@ -30,6 +30,8 @@ extension WorkspaceKindDetails on WorkspaceKind {
 
 class WorkspaceSpace {
   const WorkspaceSpace({
+    this.id,
+    this.branchId,
     required this.name,
     required this.kind,
     required this.status,
@@ -37,6 +39,8 @@ class WorkspaceSpace {
     this.capacity,
   });
 
+  final String? id;
+  final String? branchId;
   final String name;
   final WorkspaceKind kind;
   final WorkspaceStatus status;
@@ -45,10 +49,29 @@ class WorkspaceSpace {
 
   String get typeDescription =>
       capacity == null ? kind.label : '${kind.label} · Capacity $capacity';
+
+  factory WorkspaceSpace.fromApi(Map<String, dynamic> json) {
+    final type = json['type'] as String? ?? 'desk';
+    final available = json['available'] as bool? ?? true;
+    return WorkspaceSpace(
+      id: json['_id'] as String?,
+      branchId: json['branch'] is String ? json['branch'] as String : null,
+      name: json['name'] as String? ?? 'Unnamed space',
+      kind: type == 'meeting_room'
+          ? WorkspaceKind.meetingRoom
+          : WorkspaceKind.hotDesk,
+      status: available ? WorkspaceStatus.free : WorkspaceStatus.occupied,
+      occupancyNote: available
+          ? 'Available for the selected demo slot'
+          : 'Already booked for the selected demo slot',
+      capacity: json['capacity'] as int?,
+    );
+  }
 }
 
 class WorkspaceLocation {
   const WorkspaceLocation({
+    this.id,
     required this.label,
     required this.name,
     required this.spaces,
@@ -56,6 +79,7 @@ class WorkspaceLocation {
     required this.deskCount,
   });
 
+  final String? id;
   final String label;
   final String name;
   final List<WorkspaceSpace> spaces;

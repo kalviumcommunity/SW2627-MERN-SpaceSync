@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
-import '../data/booking_data.dart';
 import '../models/booking.dart';
+import '../services/api_client.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_header.dart';
 import '../widgets/booking_card.dart';
@@ -27,8 +27,15 @@ class _BookingsScreenState extends State<BookingsScreen> {
 
   BookingStatus? _selectedStatus;
   String _searchQuery = '';
+  late Future<List<Booking>> _bookingsFuture;
 
-  List<Booking> get _filteredBookings {
+  @override
+  void initState() {
+    super.initState();
+    _bookingsFuture = ApiClient.instance.fetchBookings();
+  }
+
+  List<Booking> _filteredBookings(List<Booking> bookings) {
     final query = _searchQuery.trim().toLowerCase();
     return bookings.where((booking) {
       final matchesStatus =
@@ -44,7 +51,6 @@ class _BookingsScreenState extends State<BookingsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final visibleBookings = _filteredBookings;
     final colors = AppColors.of(context);
     return CustomScrollView(
       keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
@@ -115,40 +121,75 @@ class _BookingsScreenState extends State<BookingsScreen> {
                   ),
                 ),
                 const SizedBox(height: 14),
-                Row(
-                  children: [
-                    Text(
-                      '${visibleBookings.length} bookings',
-                      style: Theme.of(context).textTheme.titleMedium
-                          ?.copyWith(fontSize: 13, fontWeight: FontWeight.w700),
-                    ),
-                    const Spacer(),
-                    Icon(
-                      Icons.error_outline_rounded,
-                      size: 15,
-                      color: colors.danger,
-                    ),
-                    const SizedBox(width: 5),
-                    Text(
-                      '2 conflicts',
-                      style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                        color: colors.danger,
-                        fontWeight: FontWeight.w700,
-                        fontSize: 11,
-                      ),
-                    ),
-                  ],
+                FutureBuilder<List<Booking>>(
+                  future: _bookingsFuture,
+                  builder: (context, snapshot) {
+                    if (snapshot.connectionState == ConnectionState.waiting) {
+                      return const _BookingsLoading();
+                    }
+                    if (snapshot.hasError) {
+                      return _BookingsError(
+                        message: snapshot.error.toString(),
+                        onRetry: () => setState(
+                          () => _bookingsFuture =
+                              ApiClient.instance.fetchBookings(),
+                        ),
+                      );
+                    }
+                    final visibleBookings = _filteredBookings(snapshot.data ?? []);
+                    final conflicts = visibleBookings
+                        .where((booking) => booking.status == BookingStatus.conflict)
+                        .length;
+                    return Column(
+                      children: [
+                        Row(
+                          children: [
+                            Text(
+                              '${visibleBookings.length} bookings',
+                              style: Theme.of(context).textTheme.titleMedium
+                                  ?.copyWith(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                            ),
+                            const Spacer(),
+                            Icon(
+                              Icons.check_circle_outline_rounded,
+                              size: 15,
+                              color: conflicts == 0
+                                  ? colors.success
+                                  : colors.danger,
+                            ),
+                            const SizedBox(width: 5),
+                            Text(
+                              conflicts == 0
+                                  ? 'No conflicts'
+                                  : '$conflicts conflicts',
+                              style: Theme.of(context).textTheme.labelMedium
+                                  ?.copyWith(
+                                    color: conflicts == 0
+                                        ? colors.success
+                                        : colors.danger,
+                                    fontWeight: FontWeight.w700,
+                                    fontSize: 11,
+                                  ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 11),
+                        if (visibleBookings.isEmpty)
+                          _EmptyBookings(searchQuery: _searchQuery)
+                        else
+                          ...visibleBookings.map(
+                            (booking) => BookingCard(
+                              booking: booking,
+                              onTap: () => _showBookingDetails(context, booking),
+                            ),
+                          ),
+                      ],
+                    );
+                  },
                 ),
-                const SizedBox(height: 11),
-                if (visibleBookings.isEmpty)
-                  _EmptyBookings(searchQuery: _searchQuery)
-                else
-                  ...visibleBookings.map(
-                    (booking) => BookingCard(
-                      booking: booking,
-                      onTap: () => _showBookingDetails(context, booking),
-                    ),
-                  ),
               ],
             ),
           ),
@@ -172,6 +213,37 @@ class _BookingsScreenState extends State<BookingsScreen> {
       builder: (context) => _BookingDetailsSheet(booking: booking),
     );
   }
+}
+
+class _BookingsLoading extends StatelessWidget {
+  const _BookingsLoading();
+
+  @override
+  Widget build(BuildContext context) => const Padding(
+    padding: EdgeInsets.symmetric(vertical: 44),
+    child: Center(child: CircularProgressIndicator()),
+  );
+}
+
+class _BookingsError extends StatelessWidget {
+  const _BookingsError({required this.message, required this.onRetry});
+
+  final String message;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.symmetric(vertical: 36),
+    child: Column(
+      children: [
+        Text('Could not load bookings', style: Theme.of(context).textTheme.titleLarge),
+        const SizedBox(height: 8),
+        Text(message, textAlign: TextAlign.center),
+        const SizedBox(height: 14),
+        FilledButton(onPressed: onRetry, child: const Text('Retry')),
+      ],
+    ),
+  );
 }
 
 class _BookingDetailsSheet extends StatelessWidget {
